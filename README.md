@@ -1,5 +1,4 @@
-# Tavern-V2-Character-Card-Parser
-Python library to parse PNG Tavern v2 character cards.
+### Python library to parse PNG Tavern v2 character cards.
 
 ```
 pip3 install -r requirements.txt
