@@ -13,13 +13,19 @@ import json
 
 @dataclass_json
 @dataclass
-class TavernCardV1: # Unused in V2 parsing but kept for completeness from original
+class TavernCardV1: # Used for legacy format
     name: str = ""
     description: str = ""
     personality: str = ""
     scenario: str = ""
     first_mes: str = ""
     mes_example: str = ""
+    fav: Optional[bool] = None
+    chat: Optional[str] = None  
+    creatorcomment: Optional[str] = None
+    avatar: Optional[str] = None
+    create_date: Optional[str] = None
+    talkativeness: Optional[float] = None
 
 
 PositionType = Optional[Literal["before_char", "after_char"]]
@@ -78,13 +84,20 @@ class TavernCardV2Data:
     tags: List[str] = field(default_factory=lambda: [])
     creator: str = ""
     character_version: str = ""
+    
+    fav: Optional[bool] = None
+    chat: Optional[str] = None  
+    creatorcomment: Optional[str] = None
+    avatar: Optional[str] = None
+    create_date: Optional[str] = None
+    talkativeness: Optional[float] = None
 
 
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
 class TavernCardV2:
     spec: Literal["chara_card_v2"] = "chara_card_v2"
-    spec_version: Literal["2.0"] = "2.0" # Assuming "2.0" is the only valid version for this spec
+    spec_version: Literal["2.0"] = "2.0"
     data: TavernCardV2Data = field(
         default_factory=lambda: TavernCardV2Data(),
     )
@@ -93,7 +106,7 @@ class TavernCardV2:
 def extract_exif_data(image_path: str) -> Dict[str, Any]:
     """Extracts metadata from an image file."""
     img = Image.open(image_path)
-    img.load() # Ensure image data is loaded, especially for lazy-loading formats
+    img.load()
     return img.info
 
 
@@ -103,14 +116,15 @@ def position_converter(data: Any) -> Any:
     Converts integer 0 to None for the CharacterBookEntry.position field.
     Passes through other values for dacite's default processing and validation.
     """
-    if data == 0: # Specifically check for integer 0
+    if data == 0:
         return None
     return data
 
 
-def parse(image_path: str) -> TavernCardV2:
+def parse(image_path: str) -> Union[TavernCardV2, TavernCardV1]:
     """
-    Parses Tavern Card V2 data from an image file's metadata.
+    Parses Tavern Card data from an image file's metadata.
+    Attempts to parse as V2 first, falls back to V1 if needed.
     """
     metadata = extract_exif_data(image_path)
     if "chara" not in metadata:
@@ -129,19 +143,31 @@ def parse(image_path: str) -> TavernCardV2:
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid Tavern card format - 'chara' field does not contain valid JSON: {e}")
 
-    config = Config(
-        type_hooks={PositionType: position_converter},
-        strict=True, # Good for catching unexpected data
-        # forward_references={'CharacterBookEntry': CharacterBookEntry, ...} # If needed for complex recursive types
-    )
+    is_v2 = 'spec' in jobj and jobj['spec'] == 'chara_card_v2'
+    
+    if is_v2:
+        # V2 format parsing
+        config = dacite.Config(
+            type_hooks={PositionType: position_converter},
+            strict=False,  # Changed to False to be more lenient with unexpected fields
+        )
 
+        try:
+            return dacite.from_dict(data_class=TavernCardV2, data=jobj, config=config)
+        except dacite.DaciteError as error:
+            print(f"Error parsing as TavernCardV2, attempting V1 format: {error}")
+            # Fall through to V1 parsing as a fallback
+    
+    # V1 format parsing (or fallback)
     try:
-        parsed_card = from_dict(data_class=TavernCardV2, data=jobj, config=config)
-    except dacite.DaciteError as error: # Catching specific dacite errors can be more informative
-        print(f"Error parsing TavernCardV2 data from '{image_path}': {error}")
+        # For V1 format, we need to parse the entire JSON object directly
+        config = dacite.Config(
+            strict=False,  # Be lenient with unexpected fields
+        )
+        return dacite.from_dict(data_class=TavernCardV1, data=jobj, config=config)
+    except dacite.DaciteError as error:
+        print(f"Error parsing TavernCardV1 data from '{image_path}': {error}")
         raise
-    except Exception as error: # Catch any other unexpected errors during parsing
+    except Exception as error:
         print(f"An unexpected error occurred while parsing '{image_path}': {error}")
         raise
-
-    return parsed_card
