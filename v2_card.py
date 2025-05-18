@@ -5,12 +5,11 @@ Tavern Cards, as defined by Character Card Spec V2:
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Union
+import dacite
 from dataclasses_json import dataclass_json, Undefined
-
 from PIL import Image
 import base64
 import json
-from dacite import from_dict, Config # Modified import
 
 @dataclass_json
 @dataclass
@@ -119,7 +118,7 @@ def parse(image_path: str) -> TavernCardV2:
     
     try:
         raw_json_bytes = base64.b64decode(metadata["chara"])
-        raw_json_string = raw_json_bytes.decode('utf-8')
+        raw_json_string = raw_json_bytes.decode('utf-8') # Ensure decoding to string
     except (TypeError, base64.binascii.Error) as e:
         raise ValueError(f"Invalid Tavern card format - 'chara' field is not valid base64: {e}")
     except UnicodeDecodeError as e:
