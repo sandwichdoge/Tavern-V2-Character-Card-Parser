@@ -10,12 +10,11 @@ from dataclasses_json import dataclass_json, Undefined
 from PIL import Image
 import base64
 import json
-import dacite
-
+from dacite import from_dict, Config # Modified import
 
 @dataclass_json
 @dataclass
-class TavernCardV1:
+class TavernCardV1: # Unused in V2 parsing but kept for completeness from original
     name: str = ""
     description: str = ""
     personality: str = ""
@@ -23,6 +22,8 @@ class TavernCardV1:
     first_mes: str = ""
     mes_example: str = ""
 
+
+PositionType = Optional[Literal["before_char", "after_char"]]
 
 @dataclass_json
 @dataclass
@@ -42,7 +43,7 @@ class CharacterBookEntry:
     selective: Optional[bool] = None
     secondary_keys: Optional[List[str]] = None
     constant: Optional[bool] = None
-    position: Optional[Literal["before_char", "after_char"]] = None
+    position: PositionType = None
 
 
 @dataclass_json
@@ -84,25 +85,64 @@ class TavernCardV2Data:
 @dataclass
 class TavernCardV2:
     spec: Literal["chara_card_v2"] = "chara_card_v2"
-    spec_version: Literal["2.0"] = "2.0"
+    spec_version: Literal["2.0"] = "2.0" # Assuming "2.0" is the only valid version for this spec
     data: TavernCardV2Data = field(
         default_factory=lambda: TavernCardV2Data(),
     )
 
 
-def extract_exif_data(image_path):
+def extract_exif_data(image_path: str) -> Dict[str, Any]:
+    """Extracts metadata from an image file."""
     img = Image.open(image_path)
-    img.load()
+    img.load() # Ensure image data is loaded, especially for lazy-loading formats
     return img.info
 
 
+# Type hook function to convert '0' to None for the PositionType
+def position_converter(data: Any) -> Any:
+    """
+    Converts integer 0 to None for the CharacterBookEntry.position field.
+    Passes through other values for dacite's default processing and validation.
+    """
+    if data == 0: # Specifically check for integer 0
+        return None
+    return data
+
+
 def parse(image_path: str) -> TavernCardV2:
-    data = extract_exif_data(image_path)
-    if not data.get('chara'): raise Exception("Invalid Tavern card format - missing 'chara' field")
-    raw = base64.b64decode(data['chara'])
+    """
+    Parses Tavern Card V2 data from an image file's metadata.
+    """
+    metadata = extract_exif_data(image_path)
+    if "chara" not in metadata:
+        raise ValueError("Invalid Tavern card format - missing 'chara' field in image metadata")
+    
+    try:
+        raw_json_bytes = base64.b64decode(metadata["chara"])
+        raw_json_string = raw_json_bytes.decode('utf-8')
+    except (TypeError, base64.binascii.Error) as e:
+        raise ValueError(f"Invalid Tavern card format - 'chara' field is not valid base64: {e}")
+    except UnicodeDecodeError as e:
+        raise ValueError(f"Invalid Tavern card format - 'chara' field does not decode to UTF-8: {e}")
 
-    jobj = json.loads(raw)
-    if not jobj.get('data'): raise Exception("Invalid Tavern card format - missing 'data' field")
+    try:
+        jobj = json.loads(raw_json_string)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid Tavern card format - 'chara' field does not contain valid JSON: {e}")
 
-    # Use dacite to convert the dictionary to a TavernCardV2 instance
-    return dacite.from_dict(data_class=TavernCardV2, data=jobj)
+    config = Config(
+        type_hooks={PositionType: position_converter},
+        strict=True, # Good for catching unexpected data
+        # forward_references={'CharacterBookEntry': CharacterBookEntry, ...} # If needed for complex recursive types
+    )
+
+    try:
+        parsed_card = from_dict(data_class=TavernCardV2, data=jobj, config=config)
+    except dacite.DaciteError as error: # Catching specific dacite errors can be more informative
+        print(f"Error parsing TavernCardV2 data from '{image_path}': {error}")
+        raise
+    except Exception as error: # Catch any other unexpected errors during parsing
+        print(f"An unexpected error occurred while parsing '{image_path}': {error}")
+        raise
+
+    return parsed_card
